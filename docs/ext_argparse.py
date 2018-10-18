@@ -30,6 +30,7 @@ _block_re = re.compile(r":\n{2}\s{2}")
 _default_re = re.compile(r"Default is (.+)\.\n")
 _note_re = re.compile(r"Note: (.*)(?:\n\n|\n*$)", re.DOTALL)
 _option_re = re.compile(r"(?m)^((?!\s{2}).*)(--[\w-]+)")
+_prog_re = re.compile(r"%\(prog\)s")
 
 
 class ArgumentParser(object):
@@ -53,7 +54,8 @@ def get_parser(module_name, attr):
     argparse.ArgumentParser = ArgumentParser
     module = __import__(module_name, globals(), locals(), [attr])
     argparse.ArgumentParser = _ArgumentParser
-    return getattr(module, attr)
+    parser = getattr(module, attr)
+    return parser if not(callable(parser)) else parser.__call__()
 
 
 def indent(value, length=4):
@@ -95,6 +97,9 @@ class ArgparseDirective(Directive):
             lambda m: ".. note::\n\n" + indent(m.group(1)) + "\n\n",
             help
         )
+
+        # workaround to replace %(prog)s with streamlink
+        help = _prog_re.sub("streamlink", help)
 
         return indent(help)
 

@@ -6,26 +6,44 @@ set -e # stop on error
 command -v makensis > /dev/null 2>&1 || { echo >&2 "makensis is required to build the installer. Aborting."; exit 1; }
 command -v pynsist > /dev/null 2>&1 || { echo >&2 "pynsist is required to build the installer. Aborting."; exit 1; }
 
-
-STREAMLINK_VERSION_PLAIN=$(python setup.py --version)
 # For travis nightly builds generate a version number with commit hash
-if [ -n "${TRAVIS_BRANCH}" ] && [ -z "${TRAVIS_TAG}" ]; then
-    STREAMLINK_VI_VERSION="${STREAMLINK_VERSION_PLAIN}.${TRAVIS_BUILD_NUMBER}"
-    STREAMLINK_INSTALLER="streamlink-${STREAMLINK_VERSION_PLAIN}-${TRAVIS_BUILD_NUMBER}-${TRAVIS_COMMIT:0:7}"
-    STREAMLINK_VERSION="${STREAMLINK_VERSION_PLAIN}+${TRAVIS_COMMIT:0:7}"
-else
-    STREAMLINK_VI_VERSION="${STREAMLINK_VERSION_PLAIN}.${TRAVIS_BUILD_NUMBER:-0}"
-    STREAMLINK_VERSION="${STREAMLINK_VERSION_PLAIN}"
-    STREAMLINK_INSTALLER="streamlink-${STREAMLINK_VERSION}"
-fi
+STREAMLINK_VERSION=$(python setup.py --version)
+STREAMLINK_VERSION_PLAIN="${STREAMLINK_VERSION%%+*}"
+STREAMLINK_INSTALLER="streamlink-${STREAMLINK_VERSION/\+/_}"
+
+# include the build number
+STREAMLINK_VI_VERSION="${STREAMLINK_VERSION_PLAIN}.${TRAVIS_BUILD_NUMBER:-0}"
 
 build_dir="$(pwd)/build"
+build_dir_plugins="${build_dir}/lib/streamlink/plugins"
 nsis_dir="${build_dir}/nsis"
+files_dir="${build_dir}/files"
 # get the dist directory from an environment variable, but default to the build/nsis directory
 dist_dir="${STREAMLINK_INSTALLER_DIST_DIR:-$nsis_dir}"
-mkdir -p "${build_dir}" "${dist_dir}" "${nsis_dir}"
+mkdir -p "${build_dir}" "${dist_dir}" "${nsis_dir}" "${files_dir}"
 
-echo "Building ${STREAMLINK_INSTALLER} (v${STREAMLINK_VERSION})..." 1>&2
+echo "Building streamlink-${STREAMLINK_VERSION} package..." 1>&2
+python setup.py build 1>&2
+
+# https://github.com/streamlink/streamlink/issues/1223
+echo "Create empty files."
+old_files=(
+  "afreecatv" "alieztv" "apac" "azubutv" "bambuser" "beam" "bliptv" "canlitv"
+  "connectcast" "cyro" "daisuki" "disney_de" "dmcloud" "dmcloud_embed"
+  "douyutv_blackbox" "filmon_us" "furstream" "gaminglive" "gomexp" "letontv"
+  "livecodingtv" "livestation" "looch" "media_ccc_de" "meerkat" "neulion"
+  "nineanime" "pcyourfreetv" "seemeplay" "servustv" "stream" "streamlive"
+  "streamupcom" "tv8cat" "ufctv" "veetle" "viagame" "viasat_embed" "wattv"
+  "aftonbladet" "aliez" "antenna" "arconai" "bongacams" "brittv" "cam4"
+  "camsoda" "chaturbate" "expressen" "mips" "seetv" "speedrunslive" "streamboat"
+  "vgtv" "weeb" "oldlivestream"
+)
+for i in "${old_files[@]}"
+do
+    touch "${build_dir_plugins}/$i.py"
+done
+
+echo "Building ${STREAMLINK_INSTALLER} installer..." 1>&2
 
 cat > "${build_dir}/streamlink.cfg" <<EOF
 [Application]
@@ -35,7 +53,7 @@ entry_point=streamlink_cli.main:main
 icon=../win32/doggo.ico
 
 [Python]
-version=3.5.2
+version=3.6.6
 format=bundled
 
 [Include]
@@ -54,9 +72,8 @@ format=bundled
 ;           - urllib3
 ;           - socks / sockshandler
 ;       - websocket-client
-packages=streamlink
-         streamlink_cli
-         pkg_resources
+;       - isodate
+packages=pkg_resources
          six
          iso639
          iso3166
@@ -68,9 +85,13 @@ packages=streamlink
          websocket
          socks
          sockshandler
-pypi_wheels=pycryptodome==3.4.3
+         isodate
+pypi_wheels=pycryptodome==3.6.4
 
 files=../win32/LICENSE.txt > \$INSTDIR
+      ../build/lib/streamlink > \$INSTDIR\pkgs
+      ../build/lib/streamlink_cli > \$INSTDIR\pkgs
+
 [Command streamlink]
 entry_point=streamlink_cli.main:main
 
@@ -143,7 +164,7 @@ cat >"${build_dir}/installer_tmpl.nsi" <<EOF
 SubSection /e "Bundled tools" bundled
     Section "rtmpdump" rtmpdump
         SetOutPath "\$INSTDIR\rtmpdump"
-        File /r "rtmpdump\*.*"
+        File /r "${files_dir}\rtmpdump\*.*"
         SetShellVarContext current
         \${ConfigWrite} "\$APPDATA\streamlink\streamlinkrc" "rtmpdump=" "\$INSTDIR\rtmpdump\rtmpdump.exe" \$R0
         SetShellVarContext all
@@ -152,7 +173,7 @@ SubSection /e "Bundled tools" bundled
 
     Section "FFMPEG" ffmpeg
         SetOutPath "\$INSTDIR\ffmpeg"
-        File /r "ffmpeg\*.*"
+        File /r "${files_dir}\ffmpeg\*.*"
         SetShellVarContext current
         \${ConfigWrite} "\$APPDATA\streamlink\streamlinkrc" "ffmpeg-ffmpeg=" "\$INSTDIR\ffmpeg\ffmpeg.exe" \$R0
         SetShellVarContext all
@@ -167,7 +188,7 @@ SubSectionEnd
     SetShellVarContext current # install the config file for the current user
     SetOverwrite off # config file we don't want to overwrite
     SetOutPath \$APPDATA\streamlink
-    File /r "streamlinkrc"
+    File /r "${files_dir}\streamlinkrc"
     SetOverwrite ifnewer
     SetOutPath -
     SetShellVarContext all
@@ -228,11 +249,11 @@ echo "Building Python 3 installer" 1>&2
 
 # copy the streamlinkrc file to the build dir, we cannot use the Include.files property in the config file
 # because those files will always overwrite, and for a config file we do not want to overwrite
-cp "win32/streamlinkrc" "${nsis_dir}/streamlinkrc"
+cp "win32/streamlinkrc" "${files_dir}/streamlinkrc"
 
 # copy the ffmpeg and rtmpdump directories to the install build dir
-cp -r "win32/ffmpeg" "${nsis_dir}/"
-cp -r "win32/rtmpdump" "${nsis_dir}/"
+cp -r "win32/ffmpeg" "${files_dir}/"
+cp -r "win32/rtmpdump" "${files_dir}/"
 
 pynsist build/streamlink.cfg
 

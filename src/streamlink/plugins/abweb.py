@@ -4,8 +4,7 @@ import time
 from streamlink.cache import Cache
 from streamlink.exceptions import PluginError
 from streamlink.plugin import Plugin
-from streamlink.plugin import PluginOptions
-from streamlink.plugin.api import http
+from streamlink.plugin import PluginArguments, PluginArgument
 from streamlink.plugin.api import useragents
 from streamlink.stream import HLSStream
 from streamlink.utils import update_scheme
@@ -28,11 +27,33 @@ class ABweb(Plugin):
 
     expires_time = 3600 * 24
 
-    options = PluginOptions({
-        'username': None,
-        'password': None,
-        'purge_credentials': None
-    })
+    arguments = PluginArguments(
+        PluginArgument(
+            "username",
+            required=True,
+            requires=["password"],
+            metavar="USERNAME",
+            help="""
+            The username associated with your ABweb account, required to access any
+            ABweb stream.
+            """,
+            prompt="Enter ABweb username"
+        ),
+        PluginArgument(
+            "password",
+            sensitive=True,
+            metavar="PASSWORD",
+            help="A ABweb account password to use with --abweb-username.",
+            prompt="Enter ABweb password"
+        ),
+        PluginArgument(
+            "purge-credentials",
+            action="store_true",
+            help="""
+            Purge cached ABweb credentials to initiate a new session and
+            reauthenticate.
+            """)
+    )
 
     def __init__(self, url):
         super(ABweb, self).__init__(url)
@@ -50,7 +71,7 @@ class ABweb(Plugin):
 
     def get_iframe_url(self):
         self.logger.debug('search for an iframe')
-        res = http.get(self.url)
+        res = self.session.http.get(self.url)
         m = self._iframe_re.search(res.text)
         if not m:
             raise PluginError('No iframe found.')
@@ -62,7 +83,7 @@ class ABweb(Plugin):
 
     def get_hls_url(self, iframe_url):
         self.logger.debug('search for hls url')
-        res = http.get(iframe_url)
+        res = self.session.http.get(iframe_url)
         m = self._hls_re.search(res.text)
         if not m:
             raise PluginError('No playlist found.')
@@ -73,7 +94,7 @@ class ABweb(Plugin):
         '''login and update cached cookies'''
         self.logger.debug('login ...')
 
-        res = http.get(self.login_url)
+        res = self.session.http.get(self.login_url)
         input_list = self._input_re.findall(res.text)
         if not input_list:
             raise PluginError('Missing input data on login website.')
@@ -100,9 +121,9 @@ class ABweb(Plugin):
         }
         data.update(login_data)
 
-        res = http.post(self.login_url, data=data)
+        res = self.session.http.post(self.login_url, data=data)
 
-        for cookie in http.cookies:
+        for cookie in self.session.http.cookies:
             self._session_attributes.set(cookie.name, cookie.value, expires=3600 * 24)
 
         if self._session_attributes.get('ASP.NET_SessionId') and self._session_attributes.get('.abportail1'):
@@ -114,7 +135,7 @@ class ABweb(Plugin):
             return False
 
     def _get_streams(self):
-        http.headers.update({'User-Agent': useragents.CHROME,
+        self.session.http.headers.update({'User-Agent': useragents.CHROME,
                              'Referer': 'http://www.abweb.com/BIS-TV-Online/bistvo-tele-universal.aspx'})
 
         login_username = self.get_option('username')
@@ -138,14 +159,14 @@ class ABweb(Plugin):
                 self._authed = False
             else:
                 self.logger.info('Attempting to authenticate using cached cookies')
-                http.cookies.set('ASP.NET_SessionId', self._session_attributes.get('ASP.NET_SessionId'))
-                http.cookies.set('.abportail1', self._session_attributes.get('.abportail1'))
+                self.session.http.cookies.set('ASP.NET_SessionId', self._session_attributes.get('ASP.NET_SessionId'))
+                self.session.http.cookies.set('.abportail1', self._session_attributes.get('.abportail1'))
 
         if not self._authed and not self._login(login_username, login_password):
             return
 
         iframe_url = self.get_iframe_url()
-        http.headers.update({'Referer': iframe_url})
+        self.session.http.headers.update({'Referer': iframe_url})
 
         hls_url = self.get_hls_url(iframe_url)
         hls_url = update_scheme(self.url, hls_url)

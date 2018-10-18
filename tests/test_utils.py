@@ -1,7 +1,9 @@
+import base64
+import os.path
 import sys
+import unittest
 
 from streamlink.plugin.api.validate import xml_element, text
-from streamlink.utils import update_scheme
 
 try:
     import xml.etree.cElementTree as ET
@@ -9,12 +11,21 @@ except ImportError:
     import xml.etree.ElementTree as ET
 from streamlink import PluginError
 from streamlink.plugin.api import validate
-from streamlink.utils import *
+from streamlink.utils import (
+    absolute_url,
+    load_module,
+    parse_json,
+    parse_qsd,
+    parse_xml,
+    prepend_www,
+    rtmpparse,
+    search_dict,
+    swfdecompress,
+    verifyjson,
+)
 
-if sys.version_info[0:2] == (2, 6):
-    import unittest2 as unittest
-else:
-    import unittest
+# used in the import test to verify that this module was imported
+__test_marker__ = "test_marker"
 
 
 class TestUtil(unittest.TestCase):
@@ -57,6 +68,12 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(expected.tag, actual.tag)
         self.assertEqual(expected.attrib, actual.attrib)
 
+    def test_parse_xml_ns_ignore_tab(self):
+        expected = ET.Element("test", {"foo": "bar"})
+        actual = parse_xml(u"""<test	foo="bar"	xmlns="foo:bar"/>""", ignore_ns=True)
+        self.assertEqual(expected.tag, actual.tag)
+        self.assertEqual(expected.attrib, actual.attrib)
+
     def test_parse_xml_ns(self):
         expected = ET.Element("{foo:bar}test", {"foo": "bar"})
         actual = parse_xml(u"""<h:test foo="bar" xmlns:h="foo:bar"/>""")
@@ -80,7 +97,6 @@ class TestUtil(unittest.TestCase):
         self.assertRaises(PluginError,
                           parse_xml, u"""<test foo="bar &"/>""")
 
-
     def test_parse_xml_entities(self):
         expected = ET.Element("test", {"foo": "bar &"})
         actual = parse_xml(u"""<test foo="bar &"/>""",
@@ -89,26 +105,61 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(expected.tag, actual.tag)
         self.assertEqual(expected.attrib, actual.attrib)
 
-
     def test_parse_qsd(self):
         self.assertEqual(
             {"test": "1", "foo": "bar"},
             parse_qsd("test=1&foo=bar", schema=validate.Schema({"test": validate.text, "foo": "bar"})))
 
-    def test_update_scheme(self):
+    def test_rtmpparse(self):
         self.assertEqual(
-            "https://example.com/foo",  # becomes https
-            update_scheme("https://other.com/bar", "//example.com/foo")
+            ("rtmp://testserver.com:1935/app", "playpath?arg=1"),
+            rtmpparse("rtmp://testserver.com/app/playpath?arg=1"))
+        self.assertEqual(
+            ("rtmp://testserver.com:1935/long/app", "playpath?arg=1"),
+            rtmpparse("rtmp://testserver.com/long/app/playpath?arg=1"))
+        self.assertEqual(
+            ("rtmp://testserver.com:1935/app", None),
+            rtmpparse("rtmp://testserver.com/app"))
+
+    def test_swf_decompress(self):
+        # FYI, not a valid SWF
+        swf = b"FWS " + b"0000" + b"test data 12345"
+        swf_compressed = b"CWS " + b"0000" + base64.b64decode(b"eJwrSS0uUUhJLElUMDQyNjEFACpTBJo=")
+        self.assertEqual(swf, swfdecompress(swf_compressed))
+        self.assertEqual(swf, swfdecompress(swf))
+
+    def test_search_dict(self):
+
+        self.assertSequenceEqual(
+            list(search_dict(["one", "two"], "one")),
+            []
         )
-        self.assertEqual(
-            "http://example.com/foo",  # becomes http
-            update_scheme("http://other.com/bar", "//example.com/foo")
+        self.assertSequenceEqual(
+            list(search_dict({"two": "test2"}, "one")),
+            []
         )
-        self.assertEqual(
-            "http://example.com/foo",  # remains unchanged
-            update_scheme("https://other.com/bar", "http://example.com/foo")
+        self.assertSequenceEqual(
+            list(search_dict({"one": "test1", "two": "test2"}, "one")),
+            ["test1"]
         )
+        self.assertSequenceEqual(
+            list(search_dict({"one": {"inner": "test1"}, "two": "test2"}, "inner")),
+            ["test1"]
+        )
+        self.assertSequenceEqual(
+            list(search_dict({"one": [{"inner": "test1"}], "two": "test2"}, "inner")),
+            ["test1"]
+        )
+        self.assertSequenceEqual(
+            list(sorted(search_dict({"one": [{"inner": "test1"}], "two": {"inner": "test2"}}, "inner"))),
+            list(sorted(["test1", "test2"]))
+        )
+
+    def test_load_module_non_existent(self):
+        self.assertRaises(ImportError, load_module, "non_existent_module", os.path.dirname(__file__))
+
+    def test_load_module(self):
         self.assertEqual(
-            "https://example.com/foo",  # becomes https
-            update_scheme("https://other.com/bar", "example.com/foo")
+            sys.modules[__name__].__test_marker__,
+            load_module(__name__.split(".")[-1], os.path.dirname(__file__)).__test_marker__
         )
